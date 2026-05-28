@@ -394,16 +394,49 @@
 
     // ---------- camera ----------
     let currentStream = null;
-    let facingMode = 'environment';   // try back camera first
+    let allCameras    = [];   // [{deviceId, label, facing}] populated after first permission
+    let cameraIndex   = 0;   // index into allCameras; -1 = use facingMode fallback
 
-    async function startCamera() {
+    // Enumerate all cameras and sort: back cameras first (widest first if multiple),
+    // then front. Called once after the first getUserMedia grants permission.
+    async function enumerateCameras() {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const cams = devices.filter(d => d.kind === 'videoinput');
+        // Heuristic sort: 'front'/'user' facing last, everything else first
+        allCameras = cams.sort((a, b) => {
+          const aFront = /front|user/i.test(a.label);
+          const bFront = /front|user/i.test(b.label);
+          return aFront - bFront;
+        });
+      } catch (_) {
+        allCameras = [];
+      }
+    }
+
+    async function startCamera(deviceId) {
       stopCamera();
       try {
+        const constraint = deviceId
+          ? { deviceId: { exact: deviceId } }
+          : { facingMode: { ideal: 'environment' } };
         currentStream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: facingMode }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+          video: { ...constraint, width: { ideal: 1920 }, height: { ideal: 1080 } },
           audio: false,
         });
         video.srcObject = currentStream;
+
+        // First successful stream — enumerate all cameras now that we have permission
+        if (allCameras.length === 0) {
+          await enumerateCameras();
+          // Find the index of the camera we just started
+          const activeId = currentStream.getVideoTracks()[0]
+            ?.getSettings()?.deviceId;
+          const idx = allCameras.findIndex(c => c.deviceId === activeId);
+          cameraIndex = idx >= 0 ? idx : 0;
+        }
+
+        updateFlipLabel();
         initZoom();
       } catch (err) {
         console.error('getUserMedia failed', err);
@@ -423,9 +456,26 @@
       currentZoom = 1;
     }
 
+    // Show how many cameras there are and which one is active
+    function updateFlipLabel() {
+      if (allCameras.length > 2) {
+        // e.g. "2/3" so the user knows there are more to cycle through
+        flipBtn.setAttribute('aria-label', `Camera ${cameraIndex + 1} of ${allCameras.length}`);
+        flipBtn.title = `Camera ${cameraIndex + 1} of ${allCameras.length}`;
+      } else {
+        flipBtn.setAttribute('aria-label', 'Flip camera');
+        flipBtn.title = '';
+      }
+    }
+
     flipBtn.addEventListener('click', () => {
-      facingMode = (facingMode === 'environment') ? 'user' : 'environment';
-      startCamera();
+      if (allCameras.length > 1) {
+        cameraIndex = (cameraIndex + 1) % allCameras.length;
+        startCamera(allCameras[cameraIndex].deviceId);
+      } else {
+        // Fallback before enumeration completes
+        startCamera();
+      }
     });
 
     // ---------- zoom ----------
@@ -668,12 +718,16 @@
 
     // ---------- boot ----------
     loadSettings();
-    startCamera();
+    startCamera();   // no deviceId on first boot — uses facingMode fallback
 
     // Stop the camera if the page is hidden (saves battery), restart when visible.
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden) stopCamera();
-      else startCamera();
+      if (document.hidden) {
+        stopCamera();
+      } else {
+        const deviceId = allCameras[cameraIndex]?.deviceId;
+        startCamera(deviceId);
+      }
     });
   </script>
 </body>
