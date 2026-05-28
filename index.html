@@ -222,6 +222,61 @@
       transform: translate(-50%, -50%) scale(1);
     }
 
+    /* Level indicator */
+    #level {
+      position: fixed;
+      bottom: max(112px, calc(env(safe-area-inset-bottom, 24px) + 88px));
+      left: 20px;
+      width: 56px; height: 56px;
+      border-radius: 50%;
+      border: 2px solid rgba(255,255,255,0.5);
+      background: rgba(0,0,0,0.45);
+      z-index: 4;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: border-color 0.2s ease;
+    }
+    #level.is-level {
+      border-color: var(--accent);
+    }
+    #level-bubble {
+      width: 14px; height: 14px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.85);
+      position: absolute;
+      transform: translate(0px, 0px);
+      transition: background 0.2s ease;
+      pointer-events: none;
+    }
+    #level.is-level #level-bubble {
+      background: var(--accent);
+    }
+    /* Cross-hair lines inside level */
+    #level::before, #level::after {
+      content: "";
+      position: absolute;
+      background: rgba(255,255,255,0.2);
+      pointer-events: none;
+    }
+    #level::before { width: 1px; height: 100%; }
+    #level::after  { width: 100%; height: 1px; }
+    /* "Tap to enable" label shown before permission granted */
+    #level-prompt {
+      position: fixed;
+      bottom: max(172px, calc(env(safe-area-inset-bottom, 24px) + 148px));
+      left: 12px;
+      background: rgba(0,0,0,0.6);
+      padding: 5px 10px;
+      border-radius: 8px;
+      font-size: 11px;
+      pointer-events: none;
+      z-index: 4;
+      white-space: nowrap;
+      opacity: 1;
+      transition: opacity 0.4s ease;
+    }
+    #level-prompt.hidden { opacity: 0; }
+
     /* Zoom level indicator */
     #zoom-indicator {
       position: fixed;
@@ -266,6 +321,11 @@
     <span class="corner bl"></span>
     <span class="corner br"></span>
   </div>
+
+  <div id="level" aria-label="Level indicator">
+    <div id="level-bubble"></div>
+  </div>
+  <div id="level-prompt">Tap to enable level</div>
 
   <div id="controls">
     <button id="settings-btn" class="side-btn" aria-label="Settings">&#9881;</button>
@@ -420,6 +480,59 @@
     document.addEventListener('touchend', () => {
       if (pinchStartDist !== null) pinchStartDist = null;
     }, { passive: true });
+
+    // ---------- level indicator ----------
+    const levelEl     = document.getElementById('level');
+    const levelBubble = document.getElementById('level-bubble');
+    const levelPrompt = document.getElementById('level-prompt');
+
+    const LEVEL_THRESHOLD = 2.5;  // degrees within which we consider "level"
+    const BUBBLE_RANGE    = 18;   // max px the bubble travels from center
+
+    function onOrientation(e) {
+      // beta:  front/back tilt. Phone upright portrait = ~90°. Deviation = forward/back lean.
+      // gamma: left/right tilt. Level portrait = 0°.
+      const roll  = e.gamma || 0;                 // left/right  (-90 to 90)
+      const pitch = (e.beta  || 90) - 90;         // forward/back deviation from upright
+
+      const clamp = (v, lim) => Math.max(-lim, Math.min(lim, v));
+      const xPct  = clamp(roll,  30) / 30;
+      const yPct  = clamp(pitch, 30) / 30;
+
+      const x = xPct * BUBBLE_RANGE;
+      const y = yPct * BUBBLE_RANGE;
+      levelBubble.style.transform = `translate(${x}px, ${y}px)`;
+
+      const isLevel = Math.abs(roll) < LEVEL_THRESHOLD && Math.abs(pitch) < LEVEL_THRESHOLD;
+      levelEl.classList.toggle('is-level', isLevel);
+    }
+
+    let orientationStarted = false;
+
+    function startOrientation() {
+      if (orientationStarted) return;
+      orientationStarted = true;
+      levelPrompt.classList.add('hidden');
+      window.addEventListener('deviceorientation', onOrientation);
+    }
+
+    levelEl.addEventListener('click', () => {
+      // iOS 13+ requires a user-gesture permission request
+      if (typeof DeviceOrientationEvent !== 'undefined' &&
+          typeof DeviceOrientationEvent.requestPermission === 'function') {
+        DeviceOrientationEvent.requestPermission()
+          .then(state => { if (state === 'granted') startOrientation(); })
+          .catch(() => {});
+      } else {
+        startOrientation();
+      }
+    });
+
+    // On Android (no permission needed) start automatically
+    if (typeof DeviceOrientationEvent !== 'undefined' &&
+        typeof DeviceOrientationEvent.requestPermission !== 'function') {
+      startOrientation();
+    }
 
     // ---------- guide box settings ----------
     function loadSettings() {
