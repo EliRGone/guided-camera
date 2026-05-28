@@ -438,6 +438,17 @@
 
         updateFlipLabel();
         initZoom();
+
+        // DEBUG — remove after confirming camera count
+        if (allCameras.length > 0) {
+          const names = allCameras.map((c, i) =>
+            `${i}: ${c.label || '(no label)'} [${c.deviceId.slice(0,6)}]`).join('\n');
+          console.log('All cameras:\n' + names);
+          // Show briefly on screen
+          zoomIndicator.textContent = `${allCameras.length} cam(s)`;
+          zoomIndicator.classList.add('show');
+          setTimeout(() => zoomIndicator.classList.remove('show'), 4000);
+        }
       } catch (err) {
         console.error('getUserMedia failed', err);
         errorMsg.textContent = err && err.message
