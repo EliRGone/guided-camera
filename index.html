@@ -439,16 +439,6 @@
         updateFlipLabel();
         initZoom();
 
-        // DEBUG — remove after confirming zoom range
-        setTimeout(() => {
-          if (zoomCaps) {
-            zoomIndicator.textContent = `zoom ${zoomCaps.min}–${zoomCaps.max}`;
-          } else {
-            zoomIndicator.textContent = 'zoom: n/a';
-          }
-          zoomIndicator.classList.add('show');
-          setTimeout(() => zoomIndicator.classList.remove('show'), 5000);
-        }, 800);
       } catch (err) {
         console.error('getUserMedia failed', err);
         errorMsg.textContent = err && err.message
