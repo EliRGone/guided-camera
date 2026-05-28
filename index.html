@@ -154,7 +154,7 @@
       display: flex; align-items: center; justify-content: space-between;
       padding: 10px 0; font-size: 14px;
     }
-    #settings input[type=range] { width: 60%; }
+    #settings input[type=range] { width: 50%; }
     #settings .row-actions {
       display: flex; gap: 12px; margin-top: 8px;
     }
@@ -168,6 +168,25 @@
       font-size: 14px;
       cursor: pointer;
     }
+
+    /* Numeric size input */
+    #size-number-wrap {
+      display: flex; align-items: center; gap: 4px;
+    }
+    #size-number {
+      width: 52px;
+      padding: 4px 6px;
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.25);
+      border-radius: 6px;
+      color: #fff;
+      font-size: 14px;
+      text-align: right;
+      -moz-appearance: textfield;
+    }
+    #size-number::-webkit-inner-spin-button,
+    #size-number::-webkit-outer-spin-button { -webkit-appearance: none; }
+    #size-number-wrap span { font-size: 13px; opacity: 0.7; }
 
     /* Error overlay if camera permission is denied */
     #error {
@@ -203,6 +222,90 @@
       transform: translate(-50%, -50%) scale(1);
     }
 
+    /* Level indicator */
+    #level {
+      position: fixed;
+      bottom: max(112px, calc(env(safe-area-inset-bottom, 24px) + 88px));
+      left: 20px;
+      width: 56px; height: 56px;
+      border-radius: 50%;
+      border: 2px solid rgba(255,255,255,0.5);
+      background: rgba(0,0,0,0.45);
+      z-index: 4;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: border-color 0.2s ease;
+    }
+    #level.is-close {
+      border-color: var(--accent);
+    }
+    #level.is-level {
+      border-color: var(--accent);
+    }
+    #level-bubble {
+      width: 14px; height: 14px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.85);
+      position: absolute;
+      transform: translate(0px, 0px);
+      transition: background 0.2s ease, transform 0.05s linear;
+      pointer-events: none;
+    }
+    #level.is-close #level-bubble {
+      background: var(--accent);
+      opacity: 0.6;
+    }
+    #level.is-level #level-bubble {
+      background: var(--accent);
+      opacity: 1;
+    }
+    /* Cross-hair lines inside level */
+    #level::before, #level::after {
+      content: "";
+      position: absolute;
+      background: rgba(255,255,255,0.2);
+      pointer-events: none;
+    }
+    #level::before { width: 1px; height: 100%; }
+    #level::after  { width: 100%; height: 1px; }
+    /* "Tap to enable" label shown before permission granted */
+    #level-prompt {
+      position: fixed;
+      bottom: max(172px, calc(env(safe-area-inset-bottom, 24px) + 148px));
+      left: 12px;
+      background: rgba(0,0,0,0.6);
+      padding: 5px 10px;
+      border-radius: 8px;
+      font-size: 11px;
+      pointer-events: none;
+      z-index: 4;
+      white-space: nowrap;
+      opacity: 1;
+      transition: opacity 0.4s ease;
+    }
+    #level-prompt.hidden { opacity: 0; }
+
+    /* Zoom level indicator */
+    #zoom-indicator {
+      position: fixed;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%) scale(0.9);
+      background: rgba(0,0,0,0.7);
+      padding: 10px 18px;
+      border-radius: 10px;
+      font-size: 18px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s ease, transform 0.25s ease;
+      z-index: 40;
+    }
+    #zoom-indicator.show {
+      opacity: 1;
+      transform: translate(-50%, -50%) scale(1);
+    }
+
     /* White capture flash */
     #flash {
       position: fixed; inset: 0;
@@ -227,6 +330,11 @@
     <span class="corner br"></span>
   </div>
 
+  <div id="level" aria-label="Level indicator">
+    <div id="level-bubble"></div>
+  </div>
+  <div id="level-prompt">Tap to enable level</div>
+
   <div id="controls">
     <button id="settings-btn" class="side-btn" aria-label="Settings">&#9881;</button>
     <button id="capture" aria-label="Take photo"></button>
@@ -238,6 +346,10 @@
     <label>
       Size
       <input id="size-range" type="range" min="40" max="95" value="80" />
+      <div id="size-number-wrap">
+        <input id="size-number" type="number" min="40" max="95" value="80" />
+        <span>%</span>
+      </div>
     </label>
     <label>
       Shape
@@ -259,6 +371,7 @@
     <p id="error-msg">This app uses your camera to show a framing guide. Please allow camera access and reload.</p>
   </div>
 
+  <div id="zoom-indicator"></div>
   <div id="saved-toast">Photo saved</div>
   <div id="flash"></div>
 
@@ -271,24 +384,61 @@
     const settingsPanel = document.getElementById('settings');
     const settingsClose = document.getElementById('settings-close');
     const sizeRange     = document.getElementById('size-range');
+    const sizeNumber    = document.getElementById('size-number');
     const shapeSelect   = document.getElementById('shape-select');
     const errorBox      = document.getElementById('error');
     const errorMsg      = document.getElementById('error-msg');
     const toast         = document.getElementById('saved-toast');
     const flash         = document.getElementById('flash');
+    const zoomIndicator = document.getElementById('zoom-indicator');
 
     // ---------- camera ----------
     let currentStream = null;
-    let facingMode = 'environment';   // try back camera first
+    let allCameras    = [];   // [{deviceId, label, facing}] populated after first permission
+    let cameraIndex   = 0;   // index into allCameras; -1 = use facingMode fallback
 
-    async function startCamera() {
+    // Enumerate all cameras and sort: back cameras first (widest first if multiple),
+    // then front. Called once after the first getUserMedia grants permission.
+    async function enumerateCameras() {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const cams = devices.filter(d => d.kind === 'videoinput');
+        // Heuristic sort: 'front'/'user' facing last, everything else first
+        allCameras = cams.sort((a, b) => {
+          const aFront = /front|user/i.test(a.label);
+          const bFront = /front|user/i.test(b.label);
+          return aFront - bFront;
+        });
+      } catch (_) {
+        allCameras = [];
+      }
+    }
+
+    async function startCamera(deviceId) {
       stopCamera();
       try {
+        const constraint = deviceId
+          ? { deviceId: { exact: deviceId } }
+          : { facingMode: { ideal: 'environment' } };
         currentStream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: facingMode }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+          video: { ...constraint, width: { ideal: 1920 }, height: { ideal: 1080 } },
           audio: false,
         });
         video.srcObject = currentStream;
+
+        // First successful stream — enumerate all cameras now that we have permission
+        if (allCameras.length === 0) {
+          await enumerateCameras();
+          // Find the index of the camera we just started
+          const activeId = currentStream.getVideoTracks()[0]
+            ?.getSettings()?.deviceId;
+          const idx = allCameras.findIndex(c => c.deviceId === activeId);
+          cameraIndex = idx >= 0 ? idx : 0;
+        }
+
+        updateFlipLabel();
+        initZoom();
+
       } catch (err) {
         console.error('getUserMedia failed', err);
         errorMsg.textContent = err && err.message
@@ -303,20 +453,186 @@
         currentStream.getTracks().forEach(t => t.stop());
         currentStream = null;
       }
+      zoomCaps = null;
+      currentZoom = 1;
+    }
+
+    // Show how many cameras there are and which one is active
+    function updateFlipLabel() {
+      if (allCameras.length > 2) {
+        // e.g. "2/3" so the user knows there are more to cycle through
+        flipBtn.setAttribute('aria-label', `Camera ${cameraIndex + 1} of ${allCameras.length}`);
+        flipBtn.title = `Camera ${cameraIndex + 1} of ${allCameras.length}`;
+      } else {
+        flipBtn.setAttribute('aria-label', 'Flip camera');
+        flipBtn.title = '';
+      }
     }
 
     flipBtn.addEventListener('click', () => {
-      facingMode = (facingMode === 'environment') ? 'user' : 'environment';
-      startCamera();
+      if (allCameras.length > 1) {
+        cameraIndex = (cameraIndex + 1) % allCameras.length;
+        startCamera(allCameras[cameraIndex].deviceId);
+      } else {
+        // Fallback before enumeration completes
+        startCamera();
+      }
     });
+
+    // ---------- zoom ----------
+    let zoomCaps    = null;   // { min, max, step } or null if unsupported
+    let currentZoom = 1;
+    let pinchStartDist  = null;
+    let pinchStartZoom  = 1;
+    let zoomHideTimer   = null;
+
+    function initZoom() {
+      if (!currentStream) return;
+      const track = currentStream.getVideoTracks()[0];
+      if (!track) return;
+      const caps = track.getCapabilities ? track.getCapabilities() : {};
+      if (caps.zoom) {
+        zoomCaps = { min: caps.zoom.min, max: caps.zoom.max, step: caps.zoom.step || 0.1 };
+        currentZoom = caps.zoom.min;   // start at widest
+      } else {
+        zoomCaps = null;
+      }
+    }
+
+    function applyZoom(value) {
+      if (!zoomCaps || !currentStream) return;
+      const track = currentStream.getVideoTracks()[0];
+      if (!track) return;
+      const clamped = Math.min(zoomCaps.max, Math.max(zoomCaps.min, value));
+      currentZoom = clamped;
+      track.applyConstraints({ advanced: [{ zoom: clamped }] }).catch(() => {});
+
+      // Show zoom indicator
+      const ratio = (clamped / zoomCaps.min).toFixed(1);
+      zoomIndicator.textContent = ratio + '×';
+      zoomIndicator.classList.add('show');
+      clearTimeout(zoomHideTimer);
+      zoomHideTimer = setTimeout(() => zoomIndicator.classList.remove('show'), 1200);
+    }
+
+    function pinchDistance(touches) {
+      const dx = touches[0].clientX - touches[1].clientX;
+      const dy = touches[0].clientY - touches[1].clientY;
+      return Math.hypot(dx, dy);
+    }
+
+    document.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 2 && zoomCaps) {
+        pinchStartDist = pinchDistance(e.touches);
+        pinchStartZoom = currentZoom;
+      }
+    }, { passive: true });
+
+    document.addEventListener('touchmove', (e) => {
+      if (e.touches.length === 2 && zoomCaps && pinchStartDist !== null) {
+        const newDist = pinchDistance(e.touches);
+        const scale   = newDist / pinchStartDist;
+        applyZoom(pinchStartZoom * scale);
+      }
+    }, { passive: true });
+
+    document.addEventListener('touchend', () => {
+      if (pinchStartDist !== null) pinchStartDist = null;
+    }, { passive: true });
+
+    // ---------- level indicator ----------
+    const levelEl     = document.getElementById('level');
+    const levelBubble = document.getElementById('level-bubble');
+    const levelPrompt = document.getElementById('level-prompt');
+
+    const LEVEL_THRESHOLD = 2.5;  // degrees: fully level (gold)
+    const CLOSE_THRESHOLD = 6.0;  // degrees: close (yellow)
+    const BUBBLE_RANGE    = 18;   // max px the bubble travels from center
+    const SMOOTH_ALPHA    = 0.12; // low-pass weight (lower = smoother, more lag)
+
+    let smoothRoll  = 0;
+    let smoothPitch = 0;
+    let firstReading = true;
+
+    function onOrientation(e) {
+      // gamma: left/right tilt (-90 to 90). 0 = level when phone held upright.
+      // beta:  front/back tilt (-180 to 180). ~90 = phone upright portrait.
+      //
+      // Gimbal instability: when beta deviates far from 90° (phone tipped forward/back),
+      // gamma swings erratically. We reduce gamma's influence proportionally so the
+      // bubble only responds to gamma when the phone is close to upright.
+      const rawRoll  = e.gamma || 0;
+      const rawBeta  = e.beta  || 90;
+      const rawPitch = rawBeta - 90;
+
+      // Weight gamma down as phone tips away from upright (beta=90).
+      // cos(pitch) = 1 when upright, 0 when flat — a natural stabilizer.
+      const uprightWeight = Math.cos(rawPitch * Math.PI / 180);
+      const weightedRoll  = rawRoll * Math.max(0, uprightWeight);
+
+      // Seed smoother on first reading to avoid a startup lurch
+      if (firstReading) {
+        smoothRoll  = weightedRoll;
+        smoothPitch = rawPitch;
+        firstReading = false;
+      } else {
+        smoothRoll  = smoothRoll  * (1 - SMOOTH_ALPHA) + weightedRoll * SMOOTH_ALPHA;
+        smoothPitch = smoothPitch * (1 - SMOOTH_ALPHA) + rawPitch     * SMOOTH_ALPHA;
+      }
+
+      const clamp = (v, lim) => Math.max(-lim, Math.min(lim, v));
+      const x = clamp(smoothRoll,  30) / 30 * BUBBLE_RANGE;
+      const y = clamp(smoothPitch, 30) / 30 * BUBBLE_RANGE;
+      levelBubble.style.transform = `translate(${x}px, ${y}px)`;
+
+      const absRoll  = Math.abs(smoothRoll);
+      const absPitch = Math.abs(smoothPitch);
+      const isLevel  = absRoll < LEVEL_THRESHOLD && absPitch < LEVEL_THRESHOLD;
+      const isClose  = absRoll < CLOSE_THRESHOLD && absPitch < CLOSE_THRESHOLD;
+
+      levelEl.classList.toggle('is-level', isLevel);
+      levelEl.classList.toggle('is-close', isClose && !isLevel);
+    }
+
+    let orientationStarted = false;
+
+    function startOrientation() {
+      if (orientationStarted) return;
+      orientationStarted = true;
+      firstReading = true;
+      levelPrompt.classList.add('hidden');
+      window.addEventListener('deviceorientation', onOrientation);
+    }
+
+    levelEl.addEventListener('click', () => {
+      // iOS 13+ requires a user-gesture permission request
+      if (typeof DeviceOrientationEvent !== 'undefined' &&
+          typeof DeviceOrientationEvent.requestPermission === 'function') {
+        DeviceOrientationEvent.requestPermission()
+          .then(state => { if (state === 'granted') startOrientation(); })
+          .catch(() => {});
+      } else {
+        startOrientation();
+      }
+    });
+
+    // On Android (no permission needed) start automatically
+    if (typeof DeviceOrientationEvent !== 'undefined' &&
+        typeof DeviceOrientationEvent.requestPermission !== 'function') {
+      startOrientation();
+    }
 
     // ---------- guide box settings ----------
     function loadSettings() {
       const saved = JSON.parse(localStorage.getItem('product-cam-settings') || '{}');
-      if (saved.size)    sizeRange.value = saved.size;
-      if (saved.aspect)  shapeSelect.value = saved.aspect;
+      if (saved.size) {
+        sizeRange.value  = saved.size;
+        sizeNumber.value = saved.size;
+      }
+      if (saved.aspect) shapeSelect.value = saved.aspect;
       applySettings();
     }
+
     function applySettings() {
       const sizePct = Number(sizeRange.value);
       const aspect  = Number(shapeSelect.value);
@@ -325,7 +641,32 @@
       localStorage.setItem('product-cam-settings',
         JSON.stringify({ size: sizePct, aspect: aspect }));
     }
-    sizeRange.addEventListener('input',  applySettings);
+
+    // Slider → number box
+    sizeRange.addEventListener('input', () => {
+      sizeNumber.value = sizeRange.value;
+      applySettings();
+    });
+
+    // Number box → slider (clamp to valid range, apply on change/enter)
+    sizeNumber.addEventListener('input', () => {
+      let v = parseInt(sizeNumber.value, 10);
+      if (isNaN(v)) return;          // wait until they finish typing
+      v = Math.min(95, Math.max(40, v));
+      sizeRange.value = v;
+      applySettings();
+    });
+
+    // Also clamp + sync when the field loses focus
+    sizeNumber.addEventListener('blur', () => {
+      let v = parseInt(sizeNumber.value, 10);
+      if (isNaN(v)) v = Number(sizeRange.value);
+      v = Math.min(95, Math.max(40, v));
+      sizeNumber.value = v;
+      sizeRange.value  = v;
+      applySettings();
+    });
+
     shapeSelect.addEventListener('change', applySettings);
 
     settingsBtn.addEventListener('click', () => settingsPanel.classList.add('open'));
@@ -378,12 +719,16 @@
 
     // ---------- boot ----------
     loadSettings();
-    startCamera();
+    startCamera();   // no deviceId on first boot — uses facingMode fallback
 
     // Stop the camera if the page is hidden (saves battery), restart when visible.
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden) stopCamera();
-      else startCamera();
+      if (document.hidden) {
+        stopCamera();
+      } else {
+        const deviceId = allCameras[cameraIndex]?.deviceId;
+        startCamera(deviceId);
+      }
     });
   </script>
 </body>
